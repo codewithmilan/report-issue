@@ -1,7 +1,6 @@
 "use client";
 
-// import { supabase } from "@/lib/supabase/client"; 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { Toaster, toast } from "sonner";
@@ -11,11 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { ArrowLeft, Camera, MapPin } from "lucide-react";
+import { ArrowLeft, Camera, MapPin, Edit2 } from "lucide-react";
 import Link from "next/link";
 
 export default function ReportIssuePage() {
   const router = useRouter();
+
+  // Form states
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
@@ -24,6 +25,12 @@ export default function ReportIssuePage() {
   const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Profile states
+  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
+  const [editing, setEditing] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const categories = [
     { id: "road-transportation", name: "Road & Transportation" },
@@ -35,6 +42,26 @@ export default function ReportIssuePage() {
     { id: "building-zoning", name: "Building & Zoning" },
     { id: "other", name: "Other" },
   ];
+
+  // Fetch user session and profile
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return router.push("/auth/login");
+      setUser(session.user);
+
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .single();
+
+      setProfile(profileData);
+      setNewName(profileData?.full_name || "");
+    };
+
+    fetchUser();
+  }, [router]);
 
   const handleGetLocation = () => {
     if (!navigator.geolocation) return toast.error("Geolocation not supported");
@@ -48,18 +75,28 @@ export default function ReportIssuePage() {
     );
   };
 
+  const handleProfileUpdate = async () => {
+    if (!newName) return;
+    const updates = { full_name: newName, updated_at: new Date() };
+    const { error } = await supabase.from("profiles").update(updates).eq("id", user.id);
+    if (!error) {
+      setProfile({ ...profile, ...updates });
+      setEditing(false);
+      toast.success("Profile updated!");
+    } else {
+      toast.error(error.message);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) return router.push("/auth/login");
-      const reporterId = session.user.id;
+      if (!user) return router.push("/auth/login");
 
       let image_url: string | undefined = undefined;
-
       if (file) {
         const formData = new FormData();
         formData.append("file", file);
@@ -73,7 +110,7 @@ export default function ReportIssuePage() {
         title,
         description,
         category: categories.find(c => c.id === category)?.name,
-        reporter_id: reporterId,
+        reporter_id: user.id,
         location_address: location,
         priority,
         status: "open",
@@ -84,6 +121,13 @@ export default function ReportIssuePage() {
 
       toast.success("✅ Report submitted successfully!");
       setTitle(""); setDescription(""); setCategory(""); setLocation(""); setPriority("medium"); setFile(null);
+
+      // Update issues count in profile
+      const { data: issuesData } = await supabase
+        .from("civic_issues")
+        .select("*")
+        .eq("reporter_id", user.id);
+      setProfile({ ...profile, issues_count: issuesData.length });
     } catch (err: any) {
       setError(err.message || "Failed to submit report");
       toast.error("❌ Failed to submit report");
@@ -95,15 +139,42 @@ export default function ReportIssuePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-100">
       <Toaster position="top-right" richColors />
+
+      {/* Header */}
       <header className="border-b bg-white/80 backdrop-blur-sm shadow-sm">
-        <div className="container mx-auto px-4 py-4 flex items-center gap-4">
-          <Link href="/">
-            <Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-2" /> Back</Button>
-          </Link>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><MapPin className="w-5 h-5" /> Report an Issue</h1>
+        <div className="container mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex items-center gap-4">
+            <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-2" /> Back</Button></Link>
+            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><MapPin className="w-5 h-5" /> Report an Issue</h1>
+          </div>
+
+          {/* Profile section */}
+          {profile && (
+            <div className="bg-white shadow-md rounded-xl p-4 flex flex-col md:flex-row items-center gap-4">
+              <div>
+                <p className="font-semibold text-gray-700">Logged in as:</p>
+                <p className="text-gray-900">{profile.full_name || user.email}</p>
+                <p className="text-gray-500 text-sm">{profile.issues_count || 0} reports submitted</p>
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => setEditing(!editing)}>
+                <Edit2 size={16} /> Edit Name
+              </Button>
+            </div>
+          )}
         </div>
       </header>
 
+      {/* Edit profile */}
+      {editing && (
+        <Card className="container mx-auto px-4 py-4 mt-4 shadow-md rounded-xl bg-white/80">
+          <CardContent className="flex flex-col gap-3">
+            <Input placeholder="Enter full name" value={newName} onChange={e => setNewName(e.target.value)} />
+            <Button onClick={handleProfileUpdate}>Save Profile</Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Report Issue Form */}
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-2xl mx-auto">
           <Card className="shadow-xl border-0">
