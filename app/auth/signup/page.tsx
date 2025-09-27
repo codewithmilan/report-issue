@@ -24,9 +24,7 @@ export default function SignupPage() {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: { role }, // ✅ role metadata save ho rha hai
-      },
+      options: { data: { role } },
     });
 
     setIsLoading(false);
@@ -40,55 +38,73 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <Card className="w-full max-w-md shadow-lg">
-        <CardHeader>
-          <CardTitle className="text-center">Create Account</CardTitle>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
+      <Card className="w-full max-w-md shadow-xl rounded-xl overflow-hidden border border-gray-200">
+        <CardHeader className="bg-white py-6">
+          <CardTitle className="text-2xl text-center font-bold text-gray-900">
+            Create Account
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSignup} className="flex flex-col gap-6">
+        <CardContent className="p-6 bg-white">
+          <form onSubmit={handleSignup} className="flex flex-col gap-5">
+            {/* Email */}
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
+                placeholder="your.email@example.com"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                className="border-gray-300 focus:ring-1 focus:ring-blue-500 transition"
               />
             </div>
+
+            {/* Password */}
             <div className="grid gap-2">
               <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
+                placeholder="Enter your password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                className="border-gray-300 focus:ring-1 focus:ring-purple-500 transition"
               />
             </div>
 
-            {/* Role Selection */}
+            {/* Role Selection Dropdown */}
             <div className="grid gap-2">
               <Label htmlFor="role">Select Role</Label>
               <select
                 id="role"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
-                className="border rounded-lg p-2"
+                className="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 transition"
               >
                 <option value="citizen">Citizen</option>
                 <option value="admin">Admin</option>
               </select>
             </div>
 
-            <Button type="submit" className="w-full" disabled={isLoading}>
+            {/* Signup Button */}
+            <Button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-md transition-transform hover:scale-105"
+              disabled={isLoading}
+            >
               {isLoading ? "Signing up..." : "Sign Up"}
             </Button>
 
-            <div className="text-center text-sm">
+            {/* Login Link */}
+            <div className="mt-4 text-center text-sm text-gray-500">
               Already have an account?{" "}
-              <Link href="/auth/login" className="text-blue-600 underline">
+              <Link
+                href="/auth/login"
+                className="text-blue-600 hover:text-blue-700 font-medium underline underline-offset-2 transition"
+              >
                 Login here
               </Link>
             </div>
