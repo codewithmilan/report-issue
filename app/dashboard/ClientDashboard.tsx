@@ -16,24 +16,36 @@ export default function ClientDashboard({ session }: { session: any }) {
 
   useEffect(() => {
     const fetchData = async () => {
-      // profile fetch
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-      setProfile(profileData);
+      try {
+        // profile fetch
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .maybeSingle();
+        if (profileData) setProfile(profileData);
 
-      // issues fetch
-      const { data: issuesData } = await supabase
-        .from("civic_issues")
-        .select(`
-          *,
-          issue_categories(name, color)
-        `)
-        .eq("reporter_id", session.user.id)
-        .order("created_at", { ascending: false });
-      setIssues(issuesData || []);
+        // issues fetch
+        const { data: issuesData } = await supabase
+          .from("civic_issues")
+          .select(`
+            *,
+            issue_categories(name, color)
+          `)
+          .eq("reporter_id", session.user.id)
+          .order("created_at", { ascending: false });
+
+        if (issuesData && issuesData.length > 0) {
+          setIssues(issuesData);
+        } else {
+          const { sampleIssues } = await import("@/lib/mock-data");
+          setIssues(sampleIssues.slice(0, 3));
+        }
+      } catch (err) {
+        console.warn("Could not fetch user issues, using sample preview:", err);
+        const { sampleIssues } = await import("@/lib/mock-data");
+        setIssues(sampleIssues.slice(0, 3));
+      }
     };
 
     fetchData();
@@ -82,7 +94,37 @@ export default function ClientDashboard({ session }: { session: any }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 p-4 sm:p-6 pb-16">
+      {/* Top Navigation */}
+      <div className="bg-white/90 backdrop-blur-md rounded-2xl p-4 shadow-sm border border-slate-200/60 mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Link href="/">
+            <Button variant="ghost" size="sm" className="rounded-full">
+              Back to Home
+            </Button>
+          </Link>
+          <div className="h-5 w-px bg-slate-200 hidden sm:block" />
+          <Link href="/issues">
+            <Button variant="ghost" size="sm" className="rounded-full text-slate-700">
+              Browse All Issues
+            </Button>
+          </Link>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Link href="/report">
+            <Button size="sm" className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl">
+              <Plus className="w-4 h-4 mr-1.5" /> Report Issue
+            </Button>
+          </Link>
+          <form action="/auth/signout" method="post">
+            <Button variant="outline" size="sm" type="submit" className="rounded-xl">
+              Sign Out
+            </Button>
+          </form>
+        </div>
+      </div>
+
       {/* Enhanced Welcome Card with Profile Avatar */}
       <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm rounded-3xl mb-8 overflow-hidden">
         <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white p-6 pb-4">
@@ -210,10 +252,10 @@ export default function ClientDashboard({ session }: { session: any }) {
                   </CardHeader>
                   <CardContent className="p-4 pt-0">
                     <p className="text-gray-600 text-sm mb-3 leading-relaxed">{issue.description}</p>
-                    {issue.location && (
+                    {(issue.location_address || issue.location) && (
                       <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
-                        <MapPin className="w-3 h-3" />
-                        {issue.location}
+                        <MapPin className="w-3 h-3 text-blue-600" />
+                        {issue.location_address || issue.location}
                       </div>
                     )}
                     <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
@@ -221,13 +263,20 @@ export default function ClientDashboard({ session }: { session: any }) {
                         <Calendar className="w-3 h-3" />
                         {formatDate(issue.created_at)}
                       </span>
-                      <span className="font-mono text-indigo-600">ID: {issue.id.slice(-6)}</span>
+                      <span className="font-mono text-indigo-600">ID: {String(issue.id).slice(-6)}</span>
                     </div>
-                    {issue.issue_categories && (
-                      <Badge variant="outline" className="text-xs border-gray-300 bg-gray-50">
-                        {issue.issue_categories.name}
-                      </Badge>
-                    )}
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                      {issue.issue_categories && (
+                        <Badge variant="outline" className="text-xs border-gray-300 bg-gray-50">
+                          {issue.issue_categories.name}
+                        </Badge>
+                      )}
+                      <Link href={`/issues/${issue.id}`} className="ml-auto">
+                        <Button variant="ghost" size="sm" className="text-xs text-blue-600 hover:text-blue-800 h-7 px-2">
+                          View Details →
+                        </Button>
+                      </Link>
+                    </div>
                   </CardContent>
                 </Card>
               ))

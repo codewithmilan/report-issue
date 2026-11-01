@@ -1,252 +1,356 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase/client";
-import { Toaster, toast } from "sonner";
+import Link from "next/link";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { ArrowLeft, Camera, MapPin, Edit2 } from "lucide-react";
-import Link from "next/link";
+import { ArrowLeft, Camera, MapPin, Loader2, CheckCircle2, ShieldCheck, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 
 export default function ReportIssuePage() {
   const router = useRouter();
+  const { user, loading } = useAuth();
 
-  // Form states
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
-  const [location, setLocation] = useState("");
   const [priority, setPriority] = useState("medium");
+  const [location, setLocation] = useState("");
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Profile states
-  const [user, setUser] = useState<any>(null);
-  const [profile, setProfile] = useState<any>(null);
-  const [editing, setEditing] = useState(false);
-  const [newName, setNewName] = useState("");
+  const [isLocating, setIsLocating] = useState(false);
 
   const categories = [
-    { id: "road-transportation", name: "Road & Transportation" },
-    { id: "water-utilities", name: "Water & Utilities" },
-    { id: "parks-recreation", name: "Parks & Recreation" },
-    { id: "public-safety", name: "Public Safety" },
-    { id: "waste-management", name: "Waste Management" },
-    { id: "noise-nuisance", name: "Noise & Nuisance" },
-    { id: "building-zoning", name: "Building & Zoning" },
-    { id: "other", name: "Other" },
+    { id: "Road & Transportation", name: "Road & Transportation (Potholes, Signals)" },
+    { id: "Water & Utilities", name: "Water & Utilities (Leaks, Hydrants)" },
+    { id: "Parks & Recreation", name: "Parks & Recreation" },
+    { id: "Public Safety", name: "Public Safety (Streetlights, Hazards)" },
+    { id: "Waste Management", name: "Waste Management (Trash, Illegal Dumping)" },
+    { id: "Noise & Nuisance", name: "Noise & Nuisance" },
+    { id: "Building & Zoning", name: "Building & Zoning" },
+    { id: "Other", name: "Other Community Issue" },
   ];
 
-  // Fetch user session and profile
   useEffect(() => {
-    const fetchUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) return router.push("/auth/login");
-      setUser(session.user);
+    if (!loading && !user) {
+      router.push("/login?redirect=/report");
+    }
+  }, [user, loading, router]);
 
-      const { data: profileData } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-
-      setProfile(profileData);
-      setNewName(profileData?.full_name || "");
-    };
-
-    fetchUser();
-  }, [router]);
-
-  const handleGetLocation = () => {
-    if (!navigator.geolocation) return toast.error("Geolocation not supported");
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocation(`${pos.coords.latitude}, ${pos.coords.longitude}`);
-        toast.success("Location added successfully");
-      },
-      () => toast.error("Unable to fetch location")
-    );
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const selected = e.target.files[0];
+      setFile(selected);
+      setPreviewUrl(URL.createObjectURL(selected));
+    }
   };
 
-  const handleProfileUpdate = async () => {
-    if (!newName) return;
-    const updates = { full_name: newName, updated_at: new Date() };
-    const { error } = await supabase.from("profiles").update(updates).eq("id", user.id);
-    if (!error) {
-      setProfile({ ...profile, ...updates });
-      setEditing(false);
-      toast.success("Profile updated!");
-    } else {
-      toast.error(error.message);
+  const handleRequestLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error("Geolocation is not supported by your browser.");
+      return;
     }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLatitude(pos.coords.latitude);
+        setLongitude(pos.coords.longitude);
+        const coordsText = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+        if (!location) {
+          setLocation(coordsText);
+        }
+        setIsLocating(false);
+        toast.success("GPS Location verified successfully!");
+      },
+      (err) => {
+        setIsLocating(false);
+        toast.error("Permission denied or unable to acquire GPS location.");
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!title.trim() || !description.trim() || !category) {
+      toast.error("Please fill in all required fields (title, category, description).");
+      return;
+    }
+
     setIsSubmitting(true);
-    setError(null);
 
     try {
-      if (!user) return router.push("/auth/login");
+      let imageUrl = "";
 
-      let image_url: string | undefined = undefined;
+      // Upload file if selected
       if (file) {
         const formData = new FormData();
         formData.append("file", file);
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        image_url = data.url;
+        const uploadRes = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          imageUrl = uploadData.url || "";
+        }
       }
 
-      const { error: insertError } = await supabase.from("civic_issues").insert({
-        title,
-        description,
-        category: categories.find(c => c.id === category)?.name,
-        reporter_id: user.id,
-        location_address: location,
-        priority,
-        status: "open",
-        image_url,
+      // Submit issue to backend API (user identity extracted securely from JWT)
+      const res = await fetch("/api/v1/issues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description,
+          category,
+          priority,
+          location,
+          latitude,
+          longitude,
+          imageUrl,
+        }),
       });
 
-      if (insertError) throw insertError;
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to submit issue");
+        return;
+      }
 
-      toast.success("✅ Report submitted successfully!");
-      setTitle(""); setDescription(""); setCategory(""); setLocation(""); setPriority("medium"); setFile(null);
-
-      // Update issues count in profile
-      const { data: issuesData } = await supabase
-        .from("civic_issues")
-        .select("*")
-        .eq("reporter_id", user.id);
-      setProfile({ ...profile, issues_count: issuesData.length });
+      toast.success("Civic issue reported successfully! City staff has been notified.");
+      router.push("/user/dashboard");
     } catch (err: any) {
-      setError(err.message || "Failed to submit report");
-      toast.error("❌ Failed to submit report");
+      toast.error(err.message || "Failed to report issue. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  if (loading || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-100">
-      <Toaster position="top-right" richColors />
-
-      {/* Header */}
-      <header className="border-b bg-white/80 backdrop-blur-sm shadow-sm">
-        <div className="container mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex items-center gap-4">
-            <Link href="/"><Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4 mr-2" /> Back</Button></Link>
-            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><MapPin className="w-5 h-5" /> Report an Issue</h1>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/50 to-indigo-50/60 pb-16">
+      {/* Top Header */}
+      <header className="bg-white border-b border-slate-200/80 sticky top-0 z-40">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+          <Link href="/user/dashboard">
+            <Button variant="ghost" size="sm" className="rounded-xl gap-1 text-slate-600">
+              <ArrowLeft className="w-4 h-4" /> Back to Dashboard
+            </Button>
+          </Link>
+          <div className="text-center">
+            <h1 className="text-sm font-bold text-slate-900">Report a Civic Problem</h1>
+            <p className="text-[11px] text-slate-500">Official Municipal Submission</p>
           </div>
-
-          {/* Profile section */}
-          {profile && (
-            <div className="bg-white shadow-md rounded-xl p-4 flex flex-col md:flex-row items-center gap-4">
-              <div>
-                <p className="font-semibold text-gray-700">Logged in as:</p>
-                <p className="text-gray-900">{profile.full_name || user.email}</p>
-                <p className="text-gray-500 text-sm">{profile.issues_count || 0} reports submitted</p>
-              </div>
-              <Button size="sm" variant="secondary" onClick={() => setEditing(!editing)}>
-                <Edit2 size={16} /> Edit Name
-              </Button>
-            </div>
-          )}
+          <div className="w-20" />
         </div>
       </header>
 
-      {/* Edit profile */}
-      {editing && (
-        <Card className="container mx-auto px-4 py-4 mt-4 shadow-md rounded-xl bg-white/80">
-          <CardContent className="flex flex-col gap-3">
-            <Input placeholder="Enter full name" value={newName} onChange={e => setNewName(e.target.value)} />
-            <Button onClick={handleProfileUpdate}>Save Profile</Button>
+      {/* Main Form */}
+      <main className="container mx-auto px-4 pt-8 max-w-2xl">
+        <Card className="border border-slate-200/80 shadow-md rounded-2xl bg-white overflow-hidden">
+          <CardHeader className="bg-slate-50/60 border-b border-slate-100 p-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm">
+                <MapPin className="w-5 h-5" />
+              </div>
+              <div>
+                <CardTitle className="text-lg font-bold text-slate-900">Submit New Issue</CardTitle>
+                <CardDescription className="text-xs text-slate-500">
+                  Your report will be automatically logged and dispatched to municipal crews
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-6">
+            <form onSubmit={handleSubmit} className="space-y-5">
+              {/* Authenticated User Banner */}
+              <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-100 flex items-center justify-between text-xs text-blue-900">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-blue-600" />
+                  <span>Submitting as: <strong>{user.name}</strong> ({user.email})</span>
+                </div>
+                <span className="text-[11px] text-blue-700 bg-white px-2 py-0.5 rounded-full font-medium shadow-xs">
+                  Verified JWT
+                </span>
+              </div>
+
+              {/* Title */}
+              <div className="space-y-1.5">
+                <Label htmlFor="title" className="text-xs font-semibold text-slate-700">
+                  Issue Title <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="title"
+                  placeholder="e.g. Hazardous Pothole on Oak Avenue near 5th St"
+                  required
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="rounded-xl text-sm"
+                />
+              </div>
+
+              {/* Category & Priority */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="category" className="text-xs font-semibold text-slate-700">
+                    Category <span className="text-red-500">*</span>
+                  </Label>
+                  <Select value={category} onValueChange={setCategory}>
+                    <SelectTrigger className="rounded-xl text-sm">
+                      <SelectValue placeholder="Select Category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categories.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="priority" className="text-xs font-semibold text-slate-700">
+                    Estimated Urgency
+                  </Label>
+                  <Select value={priority} onValueChange={setPriority}>
+                    <SelectTrigger className="rounded-xl text-sm">
+                      <SelectValue placeholder="Priority" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low Priority (Cosmetic)</SelectItem>
+                      <SelectItem value="medium">Medium Priority (Standard)</SelectItem>
+                      <SelectItem value="high">High Priority (Safety Risk)</SelectItem>
+                      <SelectItem value="urgent">Urgent Priority (Emergency Hazard)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="space-y-1.5">
+                <Label htmlFor="description" className="text-xs font-semibold text-slate-700">
+                  Detailed Description <span className="text-red-500">*</span>
+                </Label>
+                <Textarea
+                  id="description"
+                  rows={4}
+                  placeholder="Provide details about the hazard, size, surrounding landmarks, or when it first occurred..."
+                  required
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="rounded-xl text-sm resize-none"
+                />
+              </div>
+
+              {/* Location & GPS */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="location" className="text-xs font-semibold text-slate-700">
+                    Location / Street Address
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={handleRequestLocation}
+                    disabled={isLocating}
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1 hover:underline cursor-pointer"
+                  >
+                    {isLocating ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" /> Verifying GPS...
+                      </>
+                    ) : (
+                      <>
+                        <MapPin className="w-3 h-3" /> Auto-Detect GPS Location
+                      </>
+                    )}
+                  </button>
+                </div>
+                <Input
+                  id="location"
+                  placeholder="e.g. 420 Elm Street, outside Elementary Entrance"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="rounded-xl text-sm"
+                />
+                {latitude !== null && longitude !== null && (
+                  <div className="p-2 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>
+                      GPS Coordinates Attached: {latitude.toFixed(6)}, {longitude.toFixed(6)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Photo Upload */}
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-slate-700">Attach Evidence Photo</Label>
+                <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl p-4 text-center transition cursor-pointer relative bg-slate-50/50">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  />
+                  {previewUrl ? (
+                    <div className="space-y-2">
+                      <img
+                        src={previewUrl}
+                        alt="Preview"
+                        className="max-h-48 mx-auto rounded-xl object-contain shadow-xs"
+                      />
+                      <p className="text-xs text-blue-600 font-semibold">Click to choose a different photo</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 py-4">
+                      <div className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
+                        <Camera className="w-5 h-5" />
+                      </div>
+                      <p className="text-xs font-semibold text-slate-700">Click to upload issue photo</p>
+                      <p className="text-[11px] text-slate-400">PNG, JPG, or WEBP up to 5MB</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Submit Button */}
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full h-11 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-xl shadow-md text-sm transition-all"
+              >
+                {isSubmitting ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Transmitting Report to Municipal Registry...
+                  </span>
+                ) : (
+                  "Submit Report"
+                )}
+              </Button>
+            </form>
           </CardContent>
         </Card>
-      )}
-
-      {/* Report Issue Form */}
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto">
-          <Card className="shadow-xl border-0">
-            <CardHeader>
-              <CardTitle className="text-2xl">Report a Civic Issue</CardTitle>
-              <CardDescription>Help improve your community by reporting issues to local authorities.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="title">Title *</Label>
-                  <Input id="title" placeholder="Issue title" value={title} onChange={e => setTitle(e.target.value)} required />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="category">Category *</Label>
-                  <Select value={category} onValueChange={setCategory} required>
-                    <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
-                    <SelectContent>
-                      {categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="location">Location *</Label>
-                  <div className="flex gap-2">
-                    <Input id="location" placeholder="Enter location" value={location} onChange={e => setLocation(e.target.value)} required />
-                    <Button type="button" variant="secondary" onClick={handleGetLocation}>📍 My Location</Button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Priority</Label>
-                  <Select value={priority} onValueChange={setPriority}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="urgent">Urgent</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description *</Label>
-                  <Textarea id="description" placeholder="Detailed info about the issue" value={description} onChange={e => setDescription(e.target.value)} rows={4} required />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Photo (Optional)</Label>
-                  <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center">
-                    <Camera className="w-10 h-10 text-slate-400 mx-auto mb-3" />
-                    <Input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] || null)} />
-                    {file && <p className="text-sm text-green-600 mt-2">{file.name} selected</p>}
-                  </div>
-                </div>
-
-                {error && <p className="text-red-600 text-sm">{error}</p>}
-
-                <div className="flex gap-4">
-                  <Button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700" disabled={isSubmitting}>
-                    {isSubmitting ? "Submitting..." : "Submit Report"}
-                  </Button>
-                  <Link href="/"><Button variant="outline" className="flex-1">Cancel</Button></Link>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      </main>
     </div>
   );
 }

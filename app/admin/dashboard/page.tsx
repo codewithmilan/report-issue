@@ -1,304 +1,1041 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import { supabase } from "@/lib/supabase/client"
-import Link from "next/link"
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { AlertTriangle, CheckCircle, Clock, Image as ImageIcon, MapPin, List, BarChart3 } from "lucide-react"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
+import React, { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Users,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  XCircle,
+  TrendingUp,
+  MapPin,
+  Settings,
+  LogOut,
+  Search,
+  Filter,
+  ShieldCheck,
+  ShieldAlert,
+  Calendar,
+  Activity,
+  UserCheck,
+  UserX,
+  RefreshCw,
+  ExternalLink,
+  MessageSquare,
+  BarChart3,
+  Loader2,
+  Eye,
+  Mail,
+  Phone,
+} from "lucide-react";
+import { toast } from "sonner";
 
-type Issue = {
-  id: string
-  title: string
-  description: string
-  status: string
-  reporter_id: string
-  created_at: string
-  image_url?: string
-  latitude?: number
-  longitude?: number
+interface Stats {
+  totalUsers: number;
+  activeUsers: number;
+  inactiveUsers: number;
+  suspendedUsers: number;
+  newUsersToday: number;
+  totalIssues: number;
+  pendingIssues: number;
+  inProgressIssues: number;
+  resolvedIssues: number;
+  rejectedIssues: number;
+  issuesToday: number;
 }
 
-const municipalData = [
-  { name: "Municipal Office A", address: "Main Road, City Center", lat: 28.6139, lng: 77.2090, distance: "2 km" },
-  { name: "Municipal Office B", address: "Near Bus Stand", lat: 28.6200, lng: 77.2150, distance: "5 km" },
-  { name: "Municipal Office C", address: "Station Road", lat: 28.6300, lng: 77.2200, distance: "7 km" },
-]
+interface UserItem {
+  _id: string;
+  name: string;
+  email: string;
+  role: "admin" | "user";
+  phone?: string;
+  avatar?: string;
+  status: "active" | "inactive" | "suspended";
+  lastLogin?: string;
+  createdAt: string;
+}
 
-export default function AdminDashboard() {
-  const [issues, setIssues] = useState<Issue[]>([])
-  const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<string>("all")
-  const [location, setLocation] = useState("")
-  const [nearestOffice, setNearestOffice] = useState<any>(null)
+interface IssueItem {
+  _id: string;
+  title: string;
+  description: string;
+  category: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userAvatar?: string;
+  imageUrl?: string;
+  location?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  status: "pending" | "in_progress" | "resolved" | "rejected";
+  priority: "low" | "medium" | "high" | "urgent";
+  adminRemarks?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ActivityLogItem {
+  _id: string;
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+  action: string;
+  description: string;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt: string;
+}
+
+export default function AdminDashboardPage() {
+  const router = useRouter();
+  const { user, loading, logout } = useAuth();
+
+  const [activeTab, setActiveTab] = useState("overview");
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [usersList, setUsersList] = useState<UserItem[]>([]);
+  const [issuesList, setIssuesList] = useState<IssueItem[]>([]);
+  const [logsList, setLogsList] = useState<ActivityLogItem[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+
+  // Filters
+  const [userSearch, setUserSearch] = useState("");
+  const [userStatusFilter, setUserStatusFilter] = useState("all");
+  const [issueSearch, setIssueSearch] = useState("");
+  const [issueStatusFilter, setIssueStatusFilter] = useState("all");
+
+  // Status update modal state
+  const [selectedIssue, setSelectedIssue] = useState<IssueItem | null>(null);
+  const [newStatus, setNewStatus] = useState<string>("pending");
+  const [adminRemarks, setAdminRemarks] = useState("");
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // User detail modal state
+  const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
+  const [selectedUserActivities, setSelectedUserActivities] = useState<ActivityLogItem[]>([]);
+  const [isLoadingUserDetail, setIsLoadingUserDetail] = useState(false);
+
+  // Greeting
+  const getAdminGreeting = (name: string) => {
+    const hour = new Date().getHours();
+    let timeGreeting = "Good Day";
+    if (hour >= 5 && hour < 12) timeGreeting = "Good Morning";
+    else if (hour >= 12 && hour < 17) timeGreeting = "Good Afternoon";
+    else if (hour >= 17 && hour < 21) timeGreeting = "Good Evening";
+    else timeGreeting = "Good Night";
+    return `${timeGreeting}, Admin ${name || "Administrator"}!`;
+  };
+
+  const loadAllAdminData = useCallback(async () => {
+    setIsLoadingData(true);
+    try {
+      const [statsRes, usersRes, issuesRes, logsRes] = await Promise.all([
+        fetch("/api/v1/analytics"),
+        fetch("/api/v1/users"),
+        fetch("/api/v1/issues"),
+        fetch("/api/v1/activity-logs?limit=50"),
+      ]);
+
+      if (statsRes.ok) {
+        const d = await statsRes.json();
+        setStats(d.stats);
+      }
+      if (usersRes.ok) {
+        const d = await usersRes.json();
+        setUsersList(d.users || []);
+      }
+      if (issuesRes.ok) {
+        const d = await issuesRes.json();
+        setIssuesList(d.issues || []);
+      }
+      if (logsRes.ok) {
+        const d = await logsRes.json();
+        setLogsList(d.logs || []);
+      }
+    } catch (err) {
+      console.error("Failed to load admin data:", err);
+      toast.error("Failed to load live administration data");
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, []);
 
   useEffect(() => {
-    const fetchIssues = async () => {
-      const { data, error } = await supabase
-        .from<Issue>("civic_issues")
-        .select("*")
-        .order("created_at", { ascending: false })
-      if (!error && data) setIssues(data)
-      setLoading(false)
+    if (!loading) {
+      if (!user) {
+        router.push("/login?redirect=/admin/dashboard");
+        return;
+      }
+      if (user.role !== "admin") {
+        toast.error("Access denied. Administrator privileges required.");
+        router.push("/user/dashboard");
+        return;
+      }
+      loadAllAdminData();
     }
-    fetchIssues()
+  }, [user, loading, router, loadAllAdminData]);
 
-    const subscription = supabase
-      .channel("public:civic_issues")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "civic_issues" }, (payload) => {
-        setIssues((prev) => [payload.new as Issue, ...prev])
-      })
-      .subscribe()
+  // Handle status update
+  const handleOpenStatusModal = (issue: IssueItem) => {
+    setSelectedIssue(issue);
+    setNewStatus(issue.status);
+    setAdminRemarks(issue.adminRemarks || "");
+  };
 
-    return () => supabase.removeChannel(subscription)
-  }, [])
+  const handleSaveIssueStatus = async () => {
+    if (!selectedIssue) return;
+    setIsUpdatingStatus(true);
 
-  const getStatusColor = (status: string) => ({
-    open: "bg-red-100 text-red-800 border-red-200",
-    in_progress: "bg-yellow-100 text-yellow-800 border-yellow-200",
-    resolved: "bg-green-100 text-green-800 border-green-200",
-    closed: "bg-gray-100 text-gray-800 border-gray-200",
-  }[status] || "bg-gray-100 text-gray-800 border-gray-200")
+    try {
+      const res = await fetch(`/api/v1/issues/${selectedIssue._id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: newStatus,
+          adminRemarks,
+        }),
+      });
 
-  const getStatusIcon = (status: string) => ({
-    open: <AlertTriangle className="w-4 h-4" />,
-    in_progress: <Clock className="w-4 h-4" />,
-    resolved: <CheckCircle className="w-4 h-4" />,
-    closed: <CheckCircle className="w-4 h-4" />,
-  }[status] || <AlertTriangle className="w-4 h-4" />)
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to update issue status");
+        return;
+      }
 
-  const totalIssues = issues.length
-  const newIssues = issues.filter((i) => i.status === "open").length
-  const inProgress = issues.filter((i) => i.status === "in_progress").length
-  const resolved = issues.filter((i) => i.status === "resolved").length
-  const avgResolution =
-    resolved > 0
-      ? (
-          issues
-            .filter((i) => i.status === "resolved")
-            .reduce((acc, curr) => {
-              const diff = Math.abs(new Date().getTime() - new Date(curr.created_at).getTime())
-              return acc + diff
-            }, 0) /
-          resolved /
-          (1000 * 60 * 60 * 24)
-        ).toFixed(1)
-      : "N/A"
+      toast.success("Issue status updated successfully!");
+      setSelectedIssue(null);
+      await loadAllAdminData();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update status");
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
 
-  const filteredIssues = filter === "all" ? issues : issues.filter((i) => i.status === filter)
+  // Handle User Status toggle (Active, Inactive, Suspended)
+  const handleUpdateUserStatus = async (userId: string, newStatusVal: "active" | "inactive" | "suspended") => {
+    try {
+      const res = await fetch(`/api/v1/users/${userId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatusVal }),
+      });
 
-  const handleSearch = () => {
-    if (!location.trim()) return
-    setNearestOffice(municipalData[0])
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to update user status");
+        return;
+      }
+
+      toast.success(`User status changed to ${newStatusVal.toUpperCase()}`);
+      if (selectedUser && selectedUser._id === userId) {
+        setSelectedUser({ ...selectedUser, status: newStatusVal });
+      }
+      await loadAllAdminData();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update user");
+    }
+  };
+
+  // View user details
+  const handleViewUser = async (u: UserItem) => {
+    setSelectedUser(u);
+    setIsLoadingUserDetail(true);
+    try {
+      const res = await fetch(`/api/v1/users/${u._id}`);
+      if (res.ok) {
+        const d = await res.json();
+        setSelectedUserActivities(d.activityHistory || []);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsLoadingUserDetail(false);
+    }
+  };
+
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return "N/A";
+    return new Date(dateStr).toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "pending":
+        return (
+          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 font-semibold gap-1 text-[11px]">
+            <Clock className="w-3 h-3" /> Pending
+          </Badge>
+        );
+      case "in_progress":
+        return (
+          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 font-semibold gap-1 text-[11px]">
+            <AlertTriangle className="w-3 h-3" /> In Progress
+          </Badge>
+        );
+      case "resolved":
+        return (
+          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold gap-1 text-[11px]">
+            <CheckCircle2 className="w-3 h-3" /> Resolved
+          </Badge>
+        );
+      case "rejected":
+        return (
+          <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-300 font-semibold gap-1 text-[11px]">
+            <XCircle className="w-3 h-3" /> Rejected
+          </Badge>
+        );
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  const getUserStatusBadge = (status: string) => {
+    switch (status) {
+      case "active":
+        return (
+          <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-[10px]">
+            Active
+          </Badge>
+        );
+      case "suspended":
+        return (
+          <Badge className="bg-rose-50 text-rose-700 border-rose-200 font-semibold text-[10px]">
+            Suspended
+          </Badge>
+        );
+      default:
+        return (
+          <Badge className="bg-slate-100 text-slate-700 border-slate-200 font-semibold text-[10px]">
+            Inactive
+          </Badge>
+        );
+    }
+  };
+
+  if (loading || !user || (isLoadingData && !stats)) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+        <p className="text-sm font-semibold text-slate-700">Verifying Admin session &amp; loading command center...</p>
+      </div>
+    );
   }
 
+  // Filtered lists
+  const filteredUsers = usersList.filter((u) => {
+    const matchesSearch =
+      u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
+      u.email.toLowerCase().includes(userSearch.toLowerCase());
+    const matchesStatus = userStatusFilter === "all" || u.status === userStatusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  const filteredIssues = issuesList.filter((i) => {
+    const matchesSearch =
+      i.title.toLowerCase().includes(issueSearch.toLowerCase()) ||
+      i.description.toLowerCase().includes(issueSearch.toLowerCase()) ||
+      i.userName.toLowerCase().includes(issueSearch.toLowerCase()) ||
+      i.userEmail.toLowerCase().includes(issueSearch.toLowerCase());
+    const matchesStatus = issueStatusFilter === "all" || i.status === issueStatusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-4 sm:p-6 md:p-10">
-      <div className="max-w-7xl mx-auto">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl sm:text-5xl font-black bg-gradient-to-r from-gray-900 via-black to-gray-900 bg-clip-text text-transparent mb-4">
-            Admin Dashboard
-          </h1>
-          <p className="text-gray-600 text-lg max-w-2xl mx-auto">
-            Monitor civic issues, track progress, and locate nearest offices efficiently.
-          </p>
-        </div>
-
-        {/* Analytics Cards */}
-        <div className="grid gap-6 md:grid-cols-5 mb-12">
-          {[
-            { label: "Total Issues", value: totalIssues, color: "text-gray-900", icon: <List className="w-6 h-6" />, filter: "all" },
-            { label: "New Issues", value: newIssues, color: "text-red-600", icon: <AlertTriangle className="w-6 h-6" />, filter: "open" },
-            { label: "In Progress", value: inProgress, color: "text-yellow-600", icon: <Clock className="w-6 h-6" />, filter: "in_progress" },
-            { label: "Resolved", value: resolved, color: "text-green-600", icon: <CheckCircle className="w-6 h-6" />, filter: "resolved" },
-            { label: "Avg. Resolution", value: `${avgResolution} days`, color: "text-purple-600", icon: <BarChart3 className="w-6 h-6" />, filter: null },
-          ].map((card, idx) => (
-            <Card
-              key={idx}
-              className="group p-6 bg-white/80 backdrop-blur-sm rounded-3xl shadow-lg border-0 hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 cursor-pointer text-center relative overflow-hidden"
-              onClick={() => card.filter && setFilter(card.filter)}
-            >
-              <div className="absolute inset-0 bg-gradient-to-br from-white/0 to-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-              <div className={`mx-auto mb-4 p-3 rounded-2xl bg-gradient-to-r from-${card.color.replace('text-', '')}-50 to-${card.color.replace('text-', '')}-100 w-fit shadow-md group-hover:scale-110 transition-transform duration-300`}>
-                {card.icon}
+    <div className="min-h-screen bg-slate-50/80 pb-20">
+      {/* Top Navbar */}
+      <header className="sticky top-0 z-40 bg-slate-900 text-white border-b border-slate-800 shadow-md">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-2.5">
+              <div className="w-9 h-9 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-md">
+                <ShieldCheck className="w-5 h-5 text-white" />
               </div>
-              <CardTitle className={`text-xs uppercase tracking-widest font-bold ${card.color} mb-2 drop-shadow-sm`}>
-                {card.label}
-              </CardTitle>
-              <p className={`text-3xl font-extrabold ${card.color} drop-shadow-sm`}>{card.value}</p>
-            </Card>
-          ))}
-        </div>
-
-        {/* Issues List */}
-        <Card className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl overflow-hidden mb-12 border-0">
-          <CardHeader className="bg-gradient-to-r from-gray-50 to-gray-100 p-6 border-b border-gray-200">
-            <CardTitle className="text-2xl sm:text-3xl font-bold text-gray-900 flex items-center justify-between">
-              <span>
-                {filter === "all" ? "All Issues" : `${filter.replace("_", " ")} Issues`}
-              </span>
-              <Badge className="bg-blue-100 text-blue-800 px-4 py-2 rounded-full font-semibold">
-                {filteredIssues.length} {filter === "all" ? "Total" : "Filtered"}
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {loading ? (
-              <div className="p-12 text-center">
-                <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
-                <p className="text-gray-600 mt-4 text-lg font-medium">Loading issues...</p>
+              <div>
+                <span className="text-base font-bold text-white leading-none block">CivicReport</span>
+                <span className="text-[10px] font-semibold text-indigo-400 tracking-wider uppercase">Municipal Admin Center</span>
               </div>
-            ) : filteredIssues.length === 0 ? (
-              <div className="p-12 text-center">
-                <AlertTriangle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-500 text-xl font-semibold">No reports yet.</p>
-                <p className="text-gray-400 mt-2">Start monitoring civic issues in your area.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {filteredIssues.map((issue) => (
-                  <div 
-                    key={issue.id} 
-                    className="flex justify-between items-center p-6 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-300 cursor-pointer group"
-                  >
-                    <div className="flex-1 min-w-0 pr-4">
-                      <h3 className="font-bold text-xl text-gray-900 mb-2 truncate group-hover:text-blue-600 transition-colors">
-                        {issue.title}
-                      </h3>
-                      <p className="text-gray-600 line-clamp-2 mb-3 leading-relaxed">{issue.description}</p>
-                      <div className="flex items-center gap-4 text-sm text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-4 h-4" />
-                          {new Date(issue.created_at).toLocaleDateString()}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-4 h-4" />
-                          {new Date(issue.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4 ml-4 flex-shrink-0">
-                      <Badge className={`${getStatusColor(issue.status)} border px-4 py-3 rounded-full shadow-md hover:shadow-lg transition-shadow`}>
-                        <div className="flex items-center gap-2 font-semibold text-sm">
-                          {getStatusIcon(issue.status)}
-                          <span className="capitalize">{issue.status.replace("_", " ")}</span>
-                        </div>
-                      </Badge>
-                      <Link 
-                        href={`/issues/${issue.id}`} 
-                        className="bg-gradient-to-r from-black to-gray-900 text-white px-6 py-3 rounded-2xl hover:from-gray-900 hover:to-black transition-all duration-300 font-semibold text-sm shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
-                      >
-                        View Details
-                      </Link>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Uploaded Images */}
-        <section className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl p-8 mb-12 border-0 overflow-hidden">
-          <h2 className="text-3xl font-bold mb-8 text-gray-900 flex items-center gap-3">
-            <ImageIcon className="w-8 h-8 text-blue-600" /> 
-            Uploaded Images
-            <Badge className="bg-blue-100 text-blue-800 ml-auto px-3 py-1 rounded-full font-semibold">
-              {issues.filter((i) => i.image_url).length} Images
-            </Badge>
-          </h2>
-          {issues.filter((i) => i.image_url).length ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {issues.filter((i) => i.image_url).map((issue) => (
-                <div 
-                  key={issue.id} 
-                  className="group overflow-hidden rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-500 cursor-pointer bg-gradient-to-br from-gray-50 to-white transform hover:scale-105"
-                >
-                  <div className="relative overflow-hidden">
-                    <img 
-                      src={issue.image_url} 
-                      alt={issue.title} 
-                      className="w-full h-48 object-cover group-hover:scale-110 transition-transform duration-500" 
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                  </div>
-                  <div className="p-4">
-                    <p className="text-sm font-bold text-gray-900 truncate group-hover:text-blue-600 transition-colors">
-                      {issue.title}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-1">{new Date(issue.created_at).toLocaleDateString()}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-16">
-              <ImageIcon className="w-20 h-20 text-gray-300 mx-auto mb-6 animate-pulse" />
-              <h3 className="text-gray-500 text-2xl font-semibold mb-2">No images uploaded yet.</h3>
-              <p className="text-gray-400 text-lg">Encourage users to attach photos for better issue reporting.</p>
-            </div>
-          )}
-        </section>
-
-        {/* Nearest Office with Embedded Google Map */}
-        <section className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl p-8 border-0">
-          <h2 className="text-3xl font-bold mb-8 text-gray-900 flex items-center gap-3">
-            <MapPin className="w-8 h-8 text-green-600" /> 
-            Find Nearest Municipal Office
-          </h2>
-          <div className="flex flex-col sm:flex-row gap-4 mb-8 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl">
-            <Input
-              placeholder="Enter your location (e.g., address or coordinates)..."
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="flex-1 rounded-2xl border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 bg-white shadow-sm"
-            />
-            <Button 
-              onClick={handleSearch} 
-              className="bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-bold px-8 py-3 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-0.5"
-            >
-              <MapPin className="w-5 h-5 mr-2" />
-              Search
-            </Button>
+            </Link>
           </div>
 
-          {nearestOffice && (
-            <div className="mt-6 p-6 border border-green-200 rounded-2xl bg-gradient-to-br from-green-50 to-blue-50 shadow-xl animate-fade-in">
-              <h3 className="font-bold text-xl text-gray-900 flex items-center gap-3 mb-3">
-                <MapPin className="w-6 h-6 text-green-600" /> 
-                {nearestOffice.name}
-              </h3>
-              <p className="text-gray-700 font-medium mb-2">{nearestOffice.address}</p>
-              <p className="text-green-600 font-semibold text-lg mb-6">
-                Approx. {nearestOffice.distance} away
-              </p>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={loadAllAdminData}
+              className="text-xs text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl h-8 gap-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Refresh Data
+            </Button>
+            <Link href="/admin/settings">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl h-8 gap-1.5"
+              >
+                <Settings className="w-3.5 h-3.5" /> Settings
+              </Button>
+            </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={logout}
+              className="text-xs font-semibold text-rose-300 border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 hover:text-white rounded-xl h-8 gap-1.5"
+            >
+              <LogOut className="w-3.5 h-3.5" /> Sign Out
+            </Button>
+          </div>
+        </div>
+      </header>
 
-              <div className="w-full h-80 border-2 border-green-200 rounded-2xl overflow-hidden shadow-lg">
-                <iframe
-                  width="100%"
-                  height="100%"
-                  loading="lazy"
-                  allowFullScreen
-                  className="rounded-2xl"
-                  src={`https://www.google.com/maps?q=${nearestOffice.lat},${nearestOffice.lng}&hl=en&z=15&output=embed`}
-                ></iframe>
+      {/* Main Container */}
+      <main className="container mx-auto px-4 pt-6 space-y-6 max-w-7xl">
+        {/* Admin Welcome Hero */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
+          <div className="space-y-2 relative z-10">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-xs font-semibold text-indigo-300">
+              <ShieldCheck className="w-3.5 h-3.5" /> Authorized Administrator Portal
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">
+              {getAdminGreeting(user.name)}
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
+              Complete municipal control panel: dispatch civic reports, manage citizen user records, review platform analytics, and audit security events.
+            </p>
+          </div>
+
+          <div className="relative z-10 bg-white/5 backdrop-blur-md border border-white/10 p-4 rounded-2xl flex items-center gap-3 shrink-0">
+            <img
+              src={user.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.name)}`}
+              alt={user.name}
+              className="w-12 h-12 rounded-xl object-cover border border-white/20"
+            />
+            <div className="text-xs">
+              <p className="font-bold text-white">{user.name}</p>
+              <p className="text-slate-400 text-[11px]">{user.email}</p>
+              <span className="inline-block mt-1 text-[10px] uppercase font-bold text-indigo-400 tracking-wider">
+                Full Security Access
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 10 Dashboard Statistics Cards Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
+          <Card className="border border-slate-200/90 shadow-xs rounded-2xl bg-white p-3.5">
+            <div className="flex items-center justify-between text-slate-500 text-xs font-semibold">
+              <span>Total Users</span>
+              <Users className="w-4 h-4 text-blue-600" />
+            </div>
+            <div className="text-2xl font-black text-slate-900 mt-2">{stats?.totalUsers ?? 0}</div>
+            <span className="text-[10px] text-slate-400 mt-1 block">Registered in DB</span>
+          </Card>
+
+          <Card className="border border-emerald-200/90 shadow-xs rounded-2xl bg-emerald-50/30 p-3.5">
+            <div className="flex items-center justify-between text-emerald-800 text-xs font-semibold">
+              <span>Active Users</span>
+              <UserCheck className="w-4 h-4 text-emerald-600" />
+            </div>
+            <div className="text-2xl font-black text-emerald-900 mt-2">{stats?.activeUsers ?? 0}</div>
+            <span className="text-[10px] text-emerald-700 mt-1 block">Good standing</span>
+          </Card>
+
+          <Card className="border border-rose-200/90 shadow-xs rounded-2xl bg-rose-50/30 p-3.5">
+            <div className="flex items-center justify-between text-rose-800 text-xs font-semibold">
+              <span>Inactive / Suspended</span>
+              <UserX className="w-4 h-4 text-rose-600" />
+            </div>
+            <div className="text-2xl font-black text-rose-900 mt-2">{stats?.inactiveUsers ?? 0}</div>
+            <span className="text-[10px] text-rose-700 mt-1 block">({stats?.suspendedUsers ?? 0} suspended)</span>
+          </Card>
+
+          <Card className="border border-indigo-200/90 shadow-xs rounded-2xl bg-indigo-50/30 p-3.5">
+            <div className="flex items-center justify-between text-indigo-800 text-xs font-semibold">
+              <span>New Users Today</span>
+              <TrendingUp className="w-4 h-4 text-indigo-600" />
+            </div>
+            <div className="text-2xl font-black text-indigo-900 mt-2">{stats?.newUsersToday ?? 0}</div>
+            <span className="text-[10px] text-indigo-700 mt-1 block">Joined in last 24h</span>
+          </Card>
+
+          <Card className="border border-purple-200/90 shadow-xs rounded-2xl bg-purple-50/30 p-3.5">
+            <div className="flex items-center justify-between text-purple-800 text-xs font-semibold">
+              <span>Total Issues</span>
+              <Activity className="w-4 h-4 text-purple-600" />
+            </div>
+            <div className="text-2xl font-black text-purple-900 mt-2">{stats?.totalIssues ?? 0}</div>
+            <span className="text-[10px] text-purple-700 mt-1 block">All-time submissions</span>
+          </Card>
+
+          <Card className="border border-amber-200/90 shadow-xs rounded-2xl bg-amber-50/30 p-3.5">
+            <div className="flex items-center justify-between text-amber-800 text-xs font-semibold">
+              <span>Pending Review</span>
+              <Clock className="w-4 h-4 text-amber-600" />
+            </div>
+            <div className="text-2xl font-black text-amber-900 mt-2">{stats?.pendingIssues ?? 0}</div>
+            <span className="text-[10px] text-amber-700 mt-1 block">Action required</span>
+          </Card>
+
+          <Card className="border border-blue-200/90 shadow-xs rounded-2xl bg-blue-50/30 p-3.5">
+            <div className="flex items-center justify-between text-blue-800 text-xs font-semibold">
+              <span>In Progress</span>
+              <AlertTriangle className="w-4 h-4 text-blue-600" />
+            </div>
+            <div className="text-2xl font-black text-blue-900 mt-2">{stats?.inProgressIssues ?? 0}</div>
+            <span className="text-[10px] text-blue-700 mt-1 block">Crew dispatched</span>
+          </Card>
+
+          <Card className="border border-emerald-200/90 shadow-xs rounded-2xl bg-emerald-50/30 p-3.5">
+            <div className="flex items-center justify-between text-emerald-800 text-xs font-semibold">
+              <span>Resolved</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            </div>
+            <div className="text-2xl font-black text-emerald-900 mt-2">{stats?.resolvedIssues ?? 0}</div>
+            <span className="text-[10px] text-emerald-700 mt-1 block">Completed &amp; verified</span>
+          </Card>
+
+          <Card className="border border-rose-200/90 shadow-xs rounded-2xl bg-rose-50/30 p-3.5">
+            <div className="flex items-center justify-between text-rose-800 text-xs font-semibold">
+              <span>Rejected</span>
+              <XCircle className="w-4 h-4 text-rose-600" />
+            </div>
+            <div className="text-2xl font-black text-rose-900 mt-2">{stats?.rejectedIssues ?? 0}</div>
+            <span className="text-[10px] text-rose-700 mt-1 block">Invalid / Duplicate</span>
+          </Card>
+
+          <Card className="border border-indigo-200/90 shadow-xs rounded-2xl bg-indigo-50/30 p-3.5">
+            <div className="flex items-center justify-between text-indigo-800 text-xs font-semibold">
+              <span>Issues Today</span>
+              <Calendar className="w-4 h-4 text-indigo-600" />
+            </div>
+            <div className="text-2xl font-black text-indigo-900 mt-2">{stats?.issuesToday ?? 0}</div>
+            <span className="text-[10px] text-indigo-700 mt-1 block">Submitted today</span>
+          </Card>
+        </div>
+
+        {/* Admin Navigation Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList className="bg-white border border-slate-200 p-1 rounded-2xl shadow-xs">
+            <TabsTrigger value="overview" className="rounded-xl text-xs font-bold gap-1.5 data-[state=active]:bg-indigo-600 data-[state=active]:text-white">
+              <BarChart3 className="w-4 h-4" /> Issue Management ({issuesList.length})
+            </TabsTrigger>
+            <TabsTrigger value="users" className="rounded-xl text-xs font-bold gap-1.5 data-[state=active]:bg-indigo-600 data-[state=active]:text-white">
+              <Users className="w-4 h-4" /> User Management ({usersList.length})
+            </TabsTrigger>
+            <TabsTrigger value="audit" className="rounded-xl text-xs font-bold gap-1.5 data-[state=active]:bg-indigo-600 data-[state=active]:text-white">
+              <Activity className="w-4 h-4" /> Activity &amp; Audit Logs ({logsList.length})
+            </TabsTrigger>
+          </TabsList>
+
+          {/* TAB 1: Issue Management */}
+          <TabsContent value="overview" className="space-y-4">
+            <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white overflow-hidden">
+              <CardHeader className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-base font-bold text-slate-900">Reported Civic Issues</CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Review community complaints, update lifecycle progress, and attach municipal notes
+                  </CardDescription>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input
+                      placeholder="Search title, street, citizen..."
+                      value={issueSearch}
+                      onChange={(e) => setIssueSearch(e.target.value)}
+                      className="pl-9 h-9 rounded-xl text-xs"
+                    />
+                  </div>
+
+                  <Select value={issueStatusFilter} onValueChange={setIssueStatusFilter}>
+                    <SelectTrigger className="w-36 h-9 rounded-xl text-xs">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="in_progress">In Progress</SelectItem>
+                      <SelectItem value="resolved">Resolved</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                      <tr>
+                        <th className="py-3 px-4">Issue Details</th>
+                        <th className="py-3 px-4">Reporting Citizen</th>
+                        <th className="py-3 px-4">Location &amp; GPS</th>
+                        <th className="py-3 px-4">Reported At</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredIssues.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-400">
+                            No issues match the selected criteria.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredIssues.map((issue) => (
+                          <tr key={issue._id} className="hover:bg-slate-50/60 transition-colors">
+                            <td className="py-3.5 px-4 max-w-xs">
+                              <p className="font-bold text-slate-900 truncate">{issue.title}</p>
+                              <p className="text-slate-500 text-[11px] line-clamp-1">{issue.description}</p>
+                              <span className="inline-block mt-1 bg-slate-100 text-slate-600 text-[10px] font-semibold px-2 py-0.5 rounded">
+                                {issue.category}
+                              </span>
+                              {issue.adminRemarks && (
+                                <p className="mt-1 text-[10px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded font-medium">
+                                  Note: {issue.adminRemarks}
+                                </p>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-2">
+                                <img
+                                  src={
+                                    issue.userAvatar ||
+                                    `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(issue.userName)}`
+                                  }
+                                  alt={issue.userName}
+                                  className="w-7 h-7 rounded-full object-cover border"
+                                />
+                                <div>
+                                  <p className="font-semibold text-slate-800">{issue.userName}</p>
+                                  <p className="text-[10px] text-slate-400">{issue.userEmail}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-600">
+                              <p className="flex items-center gap-1 font-medium">
+                                <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                {issue.location || "Not specified"}
+                              </p>
+                              {issue.latitude !== null && issue.longitude !== null && (
+                                <p className="text-[10px] text-slate-400 font-mono pl-4">
+                                  {issue.latitude?.toFixed(4)}, {issue.longitude?.toFixed(4)}
+                                </p>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-500 text-[11px] whitespace-nowrap">
+                              {formatDate(issue.createdAt)}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              {getStatusBadge(issue.status)}
+                            </td>
+                            <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleOpenStatusModal(issue)}
+                                className="h-7 text-xs rounded-lg font-semibold text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                              >
+                                Update Status
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* TAB 2: User Management */}
+          <TabsContent value="users" className="space-y-4">
+            <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white overflow-hidden">
+              <CardHeader className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <CardTitle className="text-base font-bold text-slate-900">User Management Directory</CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Audit registered citizen profiles, review activity histories, and manage status
+                  </CardDescription>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input
+                      placeholder="Search users by name or email..."
+                      value={userSearch}
+                      onChange={(e) => setUserSearch(e.target.value)}
+                      className="pl-9 h-9 rounded-xl text-xs"
+                    />
+                  </div>
+
+                  <Select value={userStatusFilter} onValueChange={setUserStatusFilter}>
+                    <SelectTrigger className="w-36 h-9 rounded-xl text-xs">
+                      <SelectValue placeholder="All Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Status</SelectItem>
+                      <SelectItem value="active">Active Only</SelectItem>
+                      <SelectItem value="suspended">Suspended Only</SelectItem>
+                      <SelectItem value="inactive">Inactive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                      <tr>
+                        <th className="py-3 px-4">User</th>
+                        <th className="py-3 px-4">Contact Phone</th>
+                        <th className="py-3 px-4">Role</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Registered Date</th>
+                        <th className="py-3 px-4">Last Login</th>
+                        <th className="py-3 px-4 text-right">Administrative Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-12 text-center text-slate-400">
+                            No users match the search filters.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredUsers.map((u) => (
+                          <tr key={u._id} className="hover:bg-slate-50/60 transition-colors">
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-2.5">
+                                <img
+                                  src={
+                                    u.avatar ||
+                                    `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.name)}`
+                                  }
+                                  alt={u.name}
+                                  className="w-8 h-8 rounded-full object-cover border"
+                                />
+                                <div>
+                                  <p className="font-bold text-slate-900">{u.name}</p>
+                                  <p className="text-[11px] text-slate-500">{u.email}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-600">
+                              {u.phone || "—"}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <Badge variant="outline" className="capitalize text-[10px] font-semibold">
+                                {u.role}
+                              </Badge>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              {getUserStatusBadge(u.status)}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-500 text-[11px] whitespace-nowrap">
+                              {formatDate(u.createdAt)}
+                            </td>
+                            <td className="py-3.5 px-4 text-slate-500 text-[11px] whitespace-nowrap">
+                              {formatDate(u.lastLogin)}
+                            </td>
+                            <td className="py-3.5 px-4 text-right whitespace-nowrap space-x-1.5">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleViewUser(u)}
+                                className="h-7 text-xs rounded-lg font-semibold text-slate-600 hover:text-slate-900"
+                              >
+                                <Eye className="w-3.5 h-3.5 mr-1" /> View
+                              </Button>
+
+                              {u.status !== "active" ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleUpdateUserStatus(u._id, "active")}
+                                  className="h-7 text-xs rounded-lg font-semibold text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                                >
+                                  Activate
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleUpdateUserStatus(u._id, "suspended")}
+                                  className="h-7 text-xs rounded-lg font-semibold text-rose-700 border-rose-200 hover:bg-rose-50"
+                                >
+                                  Suspend
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* TAB 3: Activity & Audit Logs */}
+          <TabsContent value="audit" className="space-y-4">
+            <Card className="border border-slate-200 shadow-xs rounded-2xl bg-white overflow-hidden">
+              <CardHeader className="p-5 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-bold text-slate-900">Application-Wide Audit Trail</CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Real-time security logs: logins, failed authentications, report creations, and administrative updates
+                  </CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+                      <tr>
+                        <th className="py-3 px-4">Event Type</th>
+                        <th className="py-3 px-4">Description</th>
+                        <th className="py-3 px-4">User</th>
+                        <th className="py-3 px-4">IP Address</th>
+                        <th className="py-3 px-4">Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {logsList.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-12 text-center text-slate-400">
+                            No activity logs found.
+                          </td>
+                        </tr>
+                      ) : (
+                        logsList.map((log) => (
+                          <tr key={log._id} className="hover:bg-slate-50/50">
+                            <td className="py-3 px-4">
+                              <Badge variant="outline" className="font-mono text-[10px] font-semibold uppercase">
+                                {log.action}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4 text-slate-700 font-medium">{log.description}</td>
+                            <td className="py-3 px-4">
+                              <span className="font-semibold text-slate-800">{log.userName || "System"}</span>
+                              {log.userEmail && <span className="text-[10px] text-slate-400 block">{log.userEmail}</span>}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-[11px] text-slate-500">{log.ipAddress || "127.0.0.1"}</td>
+                            <td className="py-3 px-4 text-slate-500 text-[11px] whitespace-nowrap">{formatDate(log.createdAt)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </main>
+
+      {/* MODAL: Update Issue Status & Admin Remarks */}
+      <Dialog open={!!selectedIssue} onOpenChange={(open) => !open && setSelectedIssue(null)}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Update Civic Issue Status</DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Change the operational lifecycle stage and attach official city notes.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedIssue && (
+            <div className="space-y-4 pt-2">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1">
+                <p className="font-bold text-slate-800">{selectedIssue.title}</p>
+                <p className="text-slate-500 text-[11px]">Reported by {selectedIssue.userName} ({selectedIssue.userEmail})</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Lifecycle Status</Label>
+                <Select value={newStatus} onValueChange={setNewStatus}>
+                  <SelectTrigger className="rounded-xl text-sm">
+                    <SelectValue placeholder="Select Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending (Awaiting review)</SelectItem>
+                    <SelectItem value="in_progress">In Progress (Crew dispatched)</SelectItem>
+                    <SelectItem value="resolved">Resolved (Problem fixed)</SelectItem>
+                    <SelectItem value="rejected">Rejected (Invalid or out of scope)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Official Admin Remarks / Resolution Notes</Label>
+                <Textarea
+                  rows={3}
+                  placeholder="e.g. Assigned to Road Crew #4. Work scheduled for Tuesday morning."
+                  value={adminRemarks}
+                  onChange={(e) => setAdminRemarks(e.target.value)}
+                  className="rounded-xl text-sm resize-none"
+                />
+              </div>
+
+              <DialogFooter className="pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setSelectedIssue(null)}
+                  className="rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  disabled={isUpdatingStatus}
+                  onClick={handleSaveIssueStatus}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl"
+                >
+                  {isUpdatingStatus ? "Updating..." : "Save Status"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL: View User Profile & Activity */}
+      <Dialog open={!!selectedUser} onOpenChange={(open) => !open && setSelectedUser(null)}>
+        <DialogContent className="sm:max-w-xl rounded-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>User Profile &amp; Activity Audit</DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Detailed citizen account inspection and historical event timeline
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedUser && (
+            <div className="space-y-5 pt-2">
+              <div className="flex items-center gap-3.5 p-4 rounded-xl bg-slate-50 border border-slate-200">
+                <img
+                  src={
+                    selectedUser.avatar ||
+                    `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(selectedUser.name)}`
+                  }
+                  alt={selectedUser.name}
+                  className="w-14 h-14 rounded-2xl object-cover border"
+                />
+                <div className="flex-1">
+                  <h4 className="text-base font-bold text-slate-900">{selectedUser.name}</h4>
+                  <p className="text-xs text-slate-500">{selectedUser.email}</p>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    {getUserStatusBadge(selectedUser.status)}
+                    <Badge variant="outline" className="text-[10px] capitalize">
+                      {selectedUser.role} Role
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl border border-slate-100 bg-white">
+                  <span className="text-slate-400 block text-[10px]">Contact Phone</span>
+                  <span className="font-semibold text-slate-800">{selectedUser.phone || "Not provided"}</span>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-100 bg-white">
+                  <span className="text-slate-400 block text-[10px]">Account Created</span>
+                  <span className="font-semibold text-slate-800">{formatDate(selectedUser.createdAt)}</span>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-100 bg-white">
+                  <span className="text-slate-400 block text-[10px]">Last Login</span>
+                  <span className="font-semibold text-slate-800">{formatDate(selectedUser.lastLogin)}</span>
+                </div>
+                <div className="p-3 rounded-xl border border-slate-100 bg-white">
+                  <span className="text-slate-400 block text-[10px]">Internal User ID</span>
+                  <span className="font-mono text-[10px] text-slate-600 truncate block">{selectedUser._id}</span>
+                </div>
+              </div>
+
+              {/* Status Action Buttons */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-100/70 border border-slate-200">
+                <span className="text-xs font-semibold text-slate-700">Account Governance:</span>
+                <div className="flex gap-2">
+                  {selectedUser.status !== "active" && (
+                    <Button
+                      size="sm"
+                      onClick={() => handleUpdateUserStatus(selectedUser._id, "active")}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8 rounded-xl font-semibold"
+                    >
+                      Activate User
+                    </Button>
+                  )}
+                  {selectedUser.status !== "suspended" && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => handleUpdateUserStatus(selectedUser._id, "suspended")}
+                      className="text-xs h-8 rounded-xl font-semibold"
+                    >
+                      Suspend User
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {/* User Activity History */}
+              <div className="space-y-2">
+                <h5 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                  Recent User Events
+                </h5>
+                {isLoadingUserDetail ? (
+                  <div className="py-6 text-center text-xs text-slate-400">Loading activity...</div>
+                ) : selectedUserActivities.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-3 text-center">No recorded activity for this user.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {selectedUserActivities.map((act) => (
+                      <div key={act._id} className="p-2.5 rounded-lg border border-slate-100 text-xs bg-slate-50/50">
+                        <div className="flex justify-between items-center text-[10px] text-slate-400">
+                          <span className="font-bold text-slate-700">{act.action}</span>
+                          <span>{formatDate(act.createdAt)}</span>
+                        </div>
+                        <p className="text-slate-600 mt-1">{act.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
-        </section>
-      </div>
-
-      <style jsx>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.5s ease-out;
-        }
-      `}</style>
+        </DialogContent>
+      </Dialog>
     </div>
-  )
+  );
 }
