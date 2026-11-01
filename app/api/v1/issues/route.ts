@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateUser, logUserActivity } from "@/lib/auth/middleware";
 import { IssueRepo } from "@/lib/db";
+import { syncIssueToSupabase } from "@/lib/supabase/sync";
 
 // GET /api/v1/issues
 export async function GET(req: NextRequest) {
@@ -83,6 +84,22 @@ export async function POST(req: NextRequest) {
       longitude: typeof longitude === "number" ? longitude : null,
       priority: ["low", "medium", "high", "urgent"].includes(priority) ? priority : "medium",
     });
+
+    // 3.1 Sync issue to Supabase public.civic_issues
+    syncIssueToSupabase({
+      title: newIssue.title,
+      description: newIssue.description,
+      category: newIssue.category,
+      userEmail: auth.user.email,
+      location: newIssue.location,
+      latitude: newIssue.latitude || undefined,
+      longitude: newIssue.longitude || undefined,
+      status: newIssue.status,
+      priority: newIssue.priority,
+      imageUrl: newIssue.imageUrl,
+      createdAt: newIssue.createdAt,
+      updatedAt: newIssue.updatedAt,
+    }).catch((e) => console.warn("[Supabase Issue Sync Warning]", e.message));
 
     // 4. Log activity
     await logUserActivity(req, {

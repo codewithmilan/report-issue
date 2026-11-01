@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateUser, logUserActivity } from "@/lib/auth/middleware";
 import { UserRepo } from "@/lib/db";
+import { syncUserToSupabase } from "@/lib/supabase/sync";
 
 export async function PATCH(req: NextRequest) {
   const auth = await authenticateUser(req);
@@ -27,6 +28,14 @@ export async function PATCH(req: NextRequest) {
     if (!updatedUser) {
       return NextResponse.json({ error: "Failed to update profile." }, { status: 400 });
     }
+
+    // Sync profile updates to Supabase
+    syncUserToSupabase({
+      email: updatedUser.email,
+      name: updatedUser.name,
+      phone: updatedUser.phone,
+      role: updatedUser.role,
+    }).catch((e) => console.warn("[Supabase Profile Sync Warning]", e.message));
 
     await logUserActivity(req, {
       userId: String(auth.user._id),

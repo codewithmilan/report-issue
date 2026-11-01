@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { UserRepo } from "@/lib/db";
 import { signJwt, AUTH_COOKIE_NAME } from "@/lib/auth/jwt";
 import { logUserActivity } from "@/lib/auth/middleware";
+import { syncUserToSupabase } from "@/lib/supabase/sync";
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,6 +39,15 @@ export async function POST(req: NextRequest) {
       role: "user",
       phone: phone || "",
     });
+
+    // 2.1 Sync user to Supabase Auth & public.profiles
+    syncUserToSupabase({
+      email: newUser.email,
+      name: newUser.name,
+      password,
+      phone: newUser.phone,
+      role: newUser.role,
+    }).catch((e) => console.warn("[Supabase Register Sync Warning]", e.message));
 
     // 3. Generate JWT
     const token = signJwt({
